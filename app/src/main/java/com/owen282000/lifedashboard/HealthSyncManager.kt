@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import java.time.Instant
+import java.util.UUID
 
 class HealthSyncManager(private val context: Context) {
 
@@ -107,18 +108,20 @@ class HealthSyncManager(private val context: Context) {
 
             // Chunk data into smaller payloads to avoid OOM/timeout
             val chunks = chunkHealthData(healthData)
+            val batchId = if (chunks.size > 1) UUID.randomUUID().toString() else null
+            val syncCounts = mutableMapOf<HealthDataType, Int>()
 
             for ((index, chunk) in chunks.withIndex()) {
-                val jsonPayload = buildJsonPayload(chunk, index, chunks.size)
+                val jsonPayload = buildJsonPayload(chunk, index, chunks.size, batchId)
                 val postResult = webhookManager.postData(jsonPayload)
                 if (postResult.isFailure) {
                     return@withContext Result.failure(postResult.exceptionOrNull() ?: Exception("Failed to post chunk ${index + 1} to webhooks"))
                 }
-            }
 
-            // Update last sync timestamps
-            val syncCounts = mutableMapOf<HealthDataType, Int>()
-            updateSyncTimestamps(healthData, syncCounts)
+                // Checkpoint every acknowledged chunk. If a later chunk fails, the next sync
+                // resumes after the successfully delivered data instead of sending it again.
+                updateSyncTimestamps(chunk, syncCounts)
+            }
 
             Result.success(HealthSyncResult.Success(syncCounts))
         } catch (e: Exception) {
@@ -140,99 +143,133 @@ class HealthSyncManager(private val context: Context) {
     private fun updateSyncTimestamps(data: HealthData, syncCounts: MutableMap<HealthDataType, Int>) {
         if (data.steps.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.STEPS, data.steps.maxOf { it.endTime }.toEpochMilli())
-            syncCounts[HealthDataType.STEPS] = data.steps.size
+            addSyncCount(syncCounts, HealthDataType.STEPS, data.steps.size)
         }
         if (data.sleep.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.SLEEP, data.sleep.maxOf { it.sessionEndTime }.toEpochMilli())
-            syncCounts[HealthDataType.SLEEP] = data.sleep.size
+            addSyncCount(syncCounts, HealthDataType.SLEEP, data.sleep.size)
         }
         if (data.heartRate.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.HEART_RATE, data.heartRate.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.HEART_RATE] = data.heartRate.size
+            addSyncCount(syncCounts, HealthDataType.HEART_RATE, data.heartRate.size)
         }
         if (data.distance.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.DISTANCE, data.distance.maxOf { it.endTime }.toEpochMilli())
-            syncCounts[HealthDataType.DISTANCE] = data.distance.size
+            addSyncCount(syncCounts, HealthDataType.DISTANCE, data.distance.size)
         }
         if (data.activeCalories.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.ACTIVE_CALORIES, data.activeCalories.maxOf { it.endTime }.toEpochMilli())
-            syncCounts[HealthDataType.ACTIVE_CALORIES] = data.activeCalories.size
+            addSyncCount(syncCounts, HealthDataType.ACTIVE_CALORIES, data.activeCalories.size)
         }
         if (data.totalCalories.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.TOTAL_CALORIES, data.totalCalories.maxOf { it.endTime }.toEpochMilli())
-            syncCounts[HealthDataType.TOTAL_CALORIES] = data.totalCalories.size
+            addSyncCount(syncCounts, HealthDataType.TOTAL_CALORIES, data.totalCalories.size)
         }
         if (data.weight.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.WEIGHT, data.weight.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.WEIGHT] = data.weight.size
+            addSyncCount(syncCounts, HealthDataType.WEIGHT, data.weight.size)
         }
         if (data.height.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.HEIGHT, data.height.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.HEIGHT] = data.height.size
+            addSyncCount(syncCounts, HealthDataType.HEIGHT, data.height.size)
         }
         if (data.bloodPressure.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.BLOOD_PRESSURE, data.bloodPressure.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.BLOOD_PRESSURE] = data.bloodPressure.size
+            addSyncCount(syncCounts, HealthDataType.BLOOD_PRESSURE, data.bloodPressure.size)
         }
         if (data.bloodGlucose.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.BLOOD_GLUCOSE, data.bloodGlucose.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.BLOOD_GLUCOSE] = data.bloodGlucose.size
+            addSyncCount(syncCounts, HealthDataType.BLOOD_GLUCOSE, data.bloodGlucose.size)
         }
         if (data.oxygenSaturation.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.OXYGEN_SATURATION, data.oxygenSaturation.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.OXYGEN_SATURATION] = data.oxygenSaturation.size
+            addSyncCount(syncCounts, HealthDataType.OXYGEN_SATURATION, data.oxygenSaturation.size)
         }
         if (data.bodyTemperature.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.BODY_TEMPERATURE, data.bodyTemperature.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.BODY_TEMPERATURE] = data.bodyTemperature.size
+            addSyncCount(syncCounts, HealthDataType.BODY_TEMPERATURE, data.bodyTemperature.size)
         }
         if (data.respiratoryRate.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.RESPIRATORY_RATE, data.respiratoryRate.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.RESPIRATORY_RATE] = data.respiratoryRate.size
+            addSyncCount(syncCounts, HealthDataType.RESPIRATORY_RATE, data.respiratoryRate.size)
         }
         if (data.restingHeartRate.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.RESTING_HEART_RATE, data.restingHeartRate.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.RESTING_HEART_RATE] = data.restingHeartRate.size
+            addSyncCount(syncCounts, HealthDataType.RESTING_HEART_RATE, data.restingHeartRate.size)
         }
         if (data.exercise.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.EXERCISE, data.exercise.maxOf { it.endTime }.toEpochMilli())
-            syncCounts[HealthDataType.EXERCISE] = data.exercise.size
+            addSyncCount(syncCounts, HealthDataType.EXERCISE, data.exercise.size)
         }
         if (data.hydration.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.HYDRATION, data.hydration.maxOf { it.endTime }.toEpochMilli())
-            syncCounts[HealthDataType.HYDRATION] = data.hydration.size
+            addSyncCount(syncCounts, HealthDataType.HYDRATION, data.hydration.size)
         }
         if (data.nutrition.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.NUTRITION, data.nutrition.maxOf { it.endTime }.toEpochMilli())
-            syncCounts[HealthDataType.NUTRITION] = data.nutrition.size
+            addSyncCount(syncCounts, HealthDataType.NUTRITION, data.nutrition.size)
         }
         if (data.mindfulness.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.MINDFULNESS, data.mindfulness.maxOf { it.endTime }.toEpochMilli())
-            syncCounts[HealthDataType.MINDFULNESS] = data.mindfulness.size
+            addSyncCount(syncCounts, HealthDataType.MINDFULNESS, data.mindfulness.size)
         }
         if (data.bodyFat.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.BODY_FAT, data.bodyFat.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.BODY_FAT] = data.bodyFat.size
+            addSyncCount(syncCounts, HealthDataType.BODY_FAT, data.bodyFat.size)
         }
         if (data.leanBodyMass.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.LEAN_BODY_MASS, data.leanBodyMass.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.LEAN_BODY_MASS] = data.leanBodyMass.size
+            addSyncCount(syncCounts, HealthDataType.LEAN_BODY_MASS, data.leanBodyMass.size)
         }
         if (data.boneMass.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.BONE_MASS, data.boneMass.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.BONE_MASS] = data.boneMass.size
+            addSyncCount(syncCounts, HealthDataType.BONE_MASS, data.boneMass.size)
         }
         if (data.bodyWaterMass.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.BODY_WATER_MASS, data.bodyWaterMass.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.BODY_WATER_MASS] = data.bodyWaterMass.size
+            addSyncCount(syncCounts, HealthDataType.BODY_WATER_MASS, data.bodyWaterMass.size)
         }
         if (data.hrv.isNotEmpty()) {
             preferencesManager.setHealthLastSyncTimestamp(HealthDataType.HEART_RATE_VARIABILITY, data.hrv.maxOf { it.time }.toEpochMilli())
-            syncCounts[HealthDataType.HEART_RATE_VARIABILITY] = data.hrv.size
+            addSyncCount(syncCounts, HealthDataType.HEART_RATE_VARIABILITY, data.hrv.size)
         }
     }
 
-    private fun chunkHealthData(data: HealthData): List<HealthData> {
+    private fun addSyncCount(
+        syncCounts: MutableMap<HealthDataType, Int>,
+        type: HealthDataType,
+        count: Int
+    ) {
+        syncCounts[type] = (syncCounts[type] ?: 0) + count
+    }
+
+    private fun chunkHealthData(originalData: HealthData): List<HealthData> {
+        // Per-chunk checkpoints are safe only when each type advances chronologically.
+        val data = originalData.copy(
+            steps = originalData.steps.sortedBy { it.endTime },
+            sleep = originalData.sleep.sortedBy { it.sessionEndTime },
+            heartRate = originalData.heartRate.sortedBy { it.time },
+            distance = originalData.distance.sortedBy { it.endTime },
+            activeCalories = originalData.activeCalories.sortedBy { it.endTime },
+            totalCalories = originalData.totalCalories.sortedBy { it.endTime },
+            weight = originalData.weight.sortedBy { it.time },
+            height = originalData.height.sortedBy { it.time },
+            bloodPressure = originalData.bloodPressure.sortedBy { it.time },
+            bloodGlucose = originalData.bloodGlucose.sortedBy { it.time },
+            oxygenSaturation = originalData.oxygenSaturation.sortedBy { it.time },
+            bodyTemperature = originalData.bodyTemperature.sortedBy { it.time },
+            respiratoryRate = originalData.respiratoryRate.sortedBy { it.time },
+            restingHeartRate = originalData.restingHeartRate.sortedBy { it.time },
+            exercise = originalData.exercise.sortedBy { it.endTime },
+            hydration = originalData.hydration.sortedBy { it.endTime },
+            nutrition = originalData.nutrition.sortedBy { it.endTime },
+            mindfulness = originalData.mindfulness.sortedBy { it.endTime },
+            bodyFat = originalData.bodyFat.sortedBy { it.time },
+            leanBodyMass = originalData.leanBodyMass.sortedBy { it.time },
+            boneMass = originalData.boneMass.sortedBy { it.time },
+            bodyWaterMass = originalData.bodyWaterMass.sortedBy { it.time },
+            hrv = originalData.hrv.sortedBy { it.time }
+        )
         val totalRecords = data.steps.size + data.sleep.size + data.heartRate.size +
                 data.distance.size + data.activeCalories.size + data.totalCalories.size +
                 data.weight.size + data.height.size + data.bloodPressure.size +
@@ -341,12 +378,18 @@ class HealthSyncManager(private val context: Context) {
         return chunks
     }
 
-    private fun buildJsonPayload(healthData: HealthData, chunkIndex: Int = 0, totalChunks: Int = 1): String {
+    private fun buildJsonPayload(
+        healthData: HealthData,
+        chunkIndex: Int = 0,
+        totalChunks: Int = 1,
+        batchId: String? = null
+    ): String {
         val json = buildJsonObject {
             put("timestamp", Instant.now().toString())
             put("app_version", getAppVersion())
             put("source", "health_connect")
             if (totalChunks > 1) {
+                put("batch_id", requireNotNull(batchId))
                 put("chunk", chunkIndex + 1)
                 put("total_chunks", totalChunks)
             }

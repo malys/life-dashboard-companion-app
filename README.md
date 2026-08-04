@@ -137,6 +137,22 @@ Every Health Connect payload has these top-level fields:
 
 Only enabled data types are included. Each array contains records with the following fields:
 
+When a sync contains more than 500 records, it is delivered as ordered chunks. Chunked payloads
+also include these fields:
+
+```json
+{
+  "batch_id": "c7285a1d-66b4-40db-90f8-a4978a234661",
+  "chunk": 1,
+  "total_chunks": 5
+}
+```
+
+The app checkpoints each successfully acknowledged chunk before sending the next one. If a later
+chunk fails, the next sync resumes after the acknowledged records. Receivers should use
+`batch_id` and `chunk` together as an idempotency key because an HTTP request may be retried when
+its response is lost.
+
 #### Activity
 
 **Steps**

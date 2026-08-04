@@ -2,9 +2,9 @@ name: Security Scan
 
 on:
   push:
-    branches: [main, develop]
+    branches: [custom]
   pull_request:
-    branches: [main, develop]
+    branches: [custom]
   schedule:
     - cron: '0 2 * * 0'
 
@@ -26,7 +26,7 @@ jobs:
           cache: gradle
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -35,7 +35,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Run Trivy config scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: 'config'
           scan-ref: '.'
@@ -49,11 +49,10 @@ jobs:
           sarif_file: 'trivy-fs-results.sarif,trivy-config-results.sarif'
 
       - name: Detect secrets with TruffleHog
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
+          version: 3.96.0
           extra_args: --debug --only-verified
 
       - name: Check Gradle dependencies

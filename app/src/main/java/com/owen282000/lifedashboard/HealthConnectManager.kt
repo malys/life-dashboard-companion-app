@@ -396,7 +396,12 @@ class HealthConnectManager(private val context: Context) {
             val paged = readAllRecords(recordType, startTime, endTime)
             val filtered = paged.records.filter { lastSync == null || timeOf(it) > lastSync }
             val maxLimit = getMaxRecordsForType(type)
-            val limited = if (filtered.size > maxLimit) filtered.takeLast(maxLimit) else filtered
+            // Process oldest pending records first so lastSync can advance without skipping data.
+            val limited = if (filtered.size > maxLimit) {
+                filtered.sortedBy(timeOf).take(maxLimit)
+            } else {
+                filtered
+            }
             val times = limited.map(timeOf)
             recordDiag(
                 type = type,
@@ -487,7 +492,12 @@ class HealthConnectManager(private val context: Context) {
                 record.samples.filter { lastSync == null || it.time > lastSync }
             }
             val maxLimit = MAX_RECORDS_HIGH_VOLUME
-            val limited = if (filtered.size > maxLimit) filtered.takeLast(maxLimit) else filtered
+            // Process oldest pending samples first so later syncs can catch up safely.
+            val limited = if (filtered.size > maxLimit) {
+                filtered.sortedBy { it.time }.take(maxLimit)
+            } else {
+                filtered
+            }
             val times = limited.map { it.time }
             recordDiag(
                 type = HealthDataType.HEART_RATE,
